@@ -2,26 +2,35 @@ import 'dart:math';
 import 'dart:ui';
 
 import 'package:flame/components.dart';
+import 'package:flame/experimental.dart';
+import 'package:flame/game.dart';
 import '../klondike_game.dart';
+import '../pile.dart';
 import '../rank.dart';
 import '../suit.dart';
+import 'tableau_pile.dart';
 
-class Card extends PositionComponent {
+class Card extends PositionComponent with DragCallbacks {
   Card(int intRank, int intSuit)
       : rank = Rank.fromInt(intRank),
         suit = Suit.fromInt(intSuit),
-        _faceUp = false,
         super(size: KlondikeGame.cardSize);
 
   final Rank rank;
   final Suit suit;
-  bool _faceUp;
+  Pile? pile;
+  bool _faceUp = false;
+  bool _isDragging = false;
+  final List<Card> attachedCards = [];
 
   bool get isFaceUp => _faceUp;
+  bool get isFaceDown => !_faceUp;
   void flip() => _faceUp = !_faceUp;
 
   @override
-  String toString() => rank.label + suit.label;
+  String toString() => rank.label + suit.label; // e.g. "Q♠" or "10♦"
+
+  //#region Rendering
 
   @override
   void render(Canvas canvas) {
@@ -47,7 +56,7 @@ class Card extends PositionComponent {
     const Radius.circular(KlondikeGame.cardRadius),
   );
   static final RRect backRRectInner = cardRRect.deflate(40);
-  static late final Sprite flameSprite = klondikeSprite(1367, 6, 357, 501);
+  static final Sprite flameSprite = klondikeSprite(1367, 6, 357, 501);
 
   void _renderBack(Canvas canvas) {
     canvas.drawRRect(cardRRect, backBackgroundPaint);
@@ -71,14 +80,14 @@ class Card extends PositionComponent {
       Color(0x880d8bff),
       BlendMode.srcATop,
     );
-  static late final Sprite redJack = klondikeSprite(81, 565, 562, 488);
-  static late final Sprite redQueen = klondikeSprite(717, 541, 486, 515);
-  static late final Sprite redKing = klondikeSprite(1305, 532, 407, 549);
-  static late final Sprite blackJack = klondikeSprite(81, 565, 562, 488)
+  static final Sprite redJack = klondikeSprite(81, 565, 562, 488);
+  static final Sprite redQueen = klondikeSprite(717, 541, 486, 515);
+  static final Sprite redKing = klondikeSprite(1305, 532, 407, 549);
+  static final Sprite blackJack = klondikeSprite(81, 565, 562, 488)
     ..paint = blueFilter;
-  static late final Sprite blackQueen = klondikeSprite(717, 541, 486, 515)
+  static final Sprite blackQueen = klondikeSprite(717, 541, 486, 515)
     ..paint = blueFilter;
-  static late final Sprite blackKing = klondikeSprite(1305, 532, 407, 549)
+  static final Sprite blackKing = klondikeSprite(1305, 532, 407, 549)
     ..paint = blueFilter;
 
   void _renderFront(Canvas canvas) {
@@ -206,4 +215,74 @@ class Card extends PositionComponent {
       canvas.restore();
     }
   }
+
+  //#endregion
+
+  //#region Dragging
+
+  @override
+  void onDragStart(DragStartEvent event) {
+    if (pile?.canMoveCard(this) ?? false) {
+      _isDragging = true;
+      priority = 100;
+      if (pile is TableauPile) {
+        attachedCards.clear();
+        final extraCards = (pile! as TableauPile).cardsOnTop(this);
+        for (final card in extraCards) {
+          card.priority = attachedCards.length + 101;
+          attachedCards.add(card);
+        }
+      }
+    }
+  }
+
+  @override
+  void onDragUpdate(DragUpdateEvent event) {
+    if (!_isDragging) {
+      return;
+    }
+    final cameraZoom = (findGame()! as FlameGame)
+        .firstChild<CameraComponent>()!
+        .viewfinder
+        .zoom;
+    final delta = event.delta / cameraZoom;
+    position.add(delta);
+    for (var card in attachedCards) {
+      card.position.add(delta);
+    }
+  }
+
+  @override
+  void onDragEnd(DragEndEvent event) {
+    if (!_isDragging) {
+      return;
+    }
+    _isDragging = false;
+    final dropPiles = parent!
+        .componentsAtPoint(position + size / 2)
+        .whereType<Pile>()
+        .toList();
+    if (dropPiles.isNotEmpty) {
+      if (dropPiles.first.canAcceptCard(this)) {
+        pile!.removeCard(this);
+        dropPiles.first.acquireCard(this);
+        if (attachedCards.isNotEmpty) {
+          for (var card in attachedCards) {
+            dropPiles.first.acquireCard(card);
+          }
+          attachedCards.clear();
+        }
+        return;
+      }
+    }
+    pile!.returnCard(this);
+    if (attachedCards.isNotEmpty) {
+      for (var card in attachedCards) {
+        pile!.returnCard(card);
+      }
+      attachedCards.clear();
+    }
+  }
+
+  //#endregion
 }
